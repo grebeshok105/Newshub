@@ -48,7 +48,12 @@ def _strip_thinking(text: str) -> str:
     return cleaned.strip()
 
 
-async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -> str | None:
+async def _call_fireworks(
+    prompt: str,
+    model_name: str,
+    max_tokens: int = 500,
+    system_prompt: str | None = None,
+) -> str | None:
     """
     Call the Fireworks AI Chat Completions API with the specified model.
     Returns the generated text, or None on any error.
@@ -65,6 +70,11 @@ async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -
         "Authorization": f"Bearer {FIREWORKS_API_KEY}",
     }
 
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
     payload = {
         "model": model_name,
         "max_tokens": max_tokens,
@@ -73,9 +83,7 @@ async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -
         "presence_penalty": 0,
         "frequency_penalty": 0,
         "temperature": 0.3,
-        "messages": [
-            {"role": "user", "content": prompt},
-        ],
+        "messages": messages,
     }
 
     logger.debug("Requesting Fireworks AI (%s)...", model_name)
@@ -125,7 +133,11 @@ async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -
         return None
 
 
-async def call_ai_with_failover(prompt: str, max_tokens: int = 500) -> str | None:
+async def call_ai_with_failover(
+    prompt: str,
+    max_tokens: int = 500,
+    system_prompt: str | None = None,
+) -> str | None:
     """
     Try the active model from settings. If it fails, cycle to the next
     supported model and retry once.
@@ -138,7 +150,7 @@ async def call_ai_with_failover(prompt: str, max_tokens: int = 500) -> str | Non
         active_model = FIREWORKS_MODEL
 
     # 2. Try active model
-    result = await _call_fireworks(prompt, active_model, max_tokens)
+    result = await _call_fireworks(prompt, active_model, max_tokens, system_prompt)
     if result:
         return scrub_markdown(result)
 
@@ -157,7 +169,7 @@ async def call_ai_with_failover(prompt: str, max_tokens: int = 500) -> str | Non
     await models.set_setting("active_model", next_model)
 
     # Retry once with the new model
-    result = await _call_fireworks(prompt, next_model, max_tokens)
+    result = await _call_fireworks(prompt, next_model, max_tokens, system_prompt)
     if result:
         return scrub_markdown(result)
 
@@ -166,17 +178,21 @@ async def call_ai_with_failover(prompt: str, max_tokens: int = 500) -> str | Non
 
 # ═══════════════════════════  SINGLE POST SUMMARY  ═════════════════════════
 
-_SUMMARY_PROMPT = """\
-Прочитай этот новый пост из Telegram-канала.
-Вот список из недавних заголовков (для контекста):
+_SUMMARY_SYSTEM_PROMPT = """\
+Ты — редактор заголовков для киберспортивного новостного канала.
+Тебе пришлют один пост и список недавних заголовков для проверки на дубликат.
+
+Правила ответа (СТРОГО):
+- Если новый пост — точный смысловой дубликат одной из недавних новостей (то же событие, результат матча, трансфер), ответь ровно одним словом: DUPLICATE_POST. Без точки. Без кавычек. Ничего больше.
+- Иначе ответь КРАТКИМ заголовком на русском. Максимум 80 символов. Только суть: кто, что, счёт. Без кавычек, без markdown, без "Заголовок:", без вступлений и пояснений. Эмодзи допустимы.
+- Не пересказывай задачу. Не объясняй ход мыслей. Не пиши ничего, кроме заголовка или DUPLICATE_POST.
+"""
+
+_SUMMARY_USER_PROMPT = """\
+Недавние заголовки:
 {context}
 
-Твоя задача:
-1. ОЧЕНЬ ВАЖНО: Проверь, не является ли новый пост очевидным ДУБЛИКАТОМ одной из этих недавних новостей (т.е. описывает то же самое событие, результат матча или трансфер).
-2. Если это точный смысловой дубликат новости из списка, напиши в ответ ровно одно слово: DUPLICATE_POST. Ничего больше.
-3. Если это НОВАЯ новость, напиши КРАТКИЙ заголовок на русском языке. Максимум 80 символов. Суть новости (кто, что, счет). Текст должен быть сухим, без кавычек, спецсимволов и "Заголовок:". Только plain text и эмодзи.
-
-Пост:
+Новый пост:
 {text}
 """
 
@@ -192,49 +208,72 @@ async def summarize_post(text: str, recent_summaries: list[str] | None = None) -
         return "—"
 
     context_str = "\n".join(f"- {s}" for s in recent_summaries) if recent_summaries else "Нет недавних новостей."
-    prompt = _SUMMARY_PROMPT.format(context=context_str, text=truncate(text, 2000))
+    user_prompt = _SUMMARY_USER_PROMPT.format(
+        context=context_str, text=truncate(text, 2000)
+    )
 
-    # deepseek-v4-pro is a reasoning model that consumes tokens for internal
-    # chain-of-thought before emitting visible content; give it generous headroom.
-    result = await call_ai_with_failover(prompt, max_tokens=512)
+    result = await call_ai_with_failover(
+        user_prompt,
+        max_tokens=512,
+        system_prompt=_SUMMARY_SYSTEM_PROMPT,
+    )
 
     if result:
-        # Clean up common LLM artifacts
-        summary = result.strip('"\'')
-        if summary.lower().startswith("заголовок:"):
-            summary = summary[10:].strip()
-        return summary
+        summary = _clean_title(result)
+        if summary:
+            return summary
 
     # ── Fallback ──
     logger.warning("AI summarization failed completely. Stripping text.")
     return make_summary_fallback(text)
 
 
+_TITLE_PREFACE_RE = re.compile(
+    r"^\s*(?:заголовок|title|ответ|answer|итог|вывод)\s*[:\-—]\s*",
+    re.IGNORECASE,
+)
+
+
+def _clean_title(raw: str) -> str:
+    """Strip common preface artefacts from a single-title model response."""
+    if not raw:
+        return ""
+    text = raw.strip().strip('"\'').strip()
+    text = _TITLE_PREFACE_RE.sub("", text).strip()
+    # Some models still emit multi-line analysis — keep only the first
+    # non-empty line, which is reliably the actual title.
+    for line in text.splitlines():
+        line = line.strip().strip('"\'').strip()
+        if line:
+            return line
+    return text
+
+
 # ═══════════════════════════  DAILY DIGEST  ════════════════════════════════
 
-_DIGEST_PROMPT = """\
-Ты — AI-редактор киберспортивного дайджеста. Твоя задача — сделать СУХУЮ и ЧЕТКУЮ выжимку.
+_DIGEST_SYSTEM_PROMPT = """\
+Ты — редактор киберспортивного дайджеста. Тебе пришлют список новостей за день, ты возвращаешь готовый дайджест.
 
-Правила форматирования (КРИТИЧЕСКИ ВАЖНО):
-1. ЗАПРЕЩЕНО использовать любое Markdown-форматирование: никаких звездочек (*), решеток (#), квадратных скобок ([]) или нижних подчеркиваний (_).
-2. Только обычный текст и ЭМОДЗИ.
-3. Текст должен быть плотным, без лишних слов.
+Правила формата (СТРОГО):
+- Только обычный текст и эмодзи. Никакого markdown: без *, #, [, ], _, `.
+- Дайджест начинается строкой «📰 Дайджест новостей — DD.MM.YYYY» — где дату подставит пользователь.
+- Главные пункты — буллеты «🔹 Заголовок — суть в 1–2 коротких предложениях.».
+- Внизу блок «📌 Коротко о другом:» со строками «· факт».
+- Сгруппируй дубли: если несколько постов об одном событии, делай ОДИН пункт.
 
-Логика контента:
-1. СГРУППИРУЙ новости: если 3 канала написали об одной победе команды — сделай из этого ОДИН пункт.
-2. Дай краткое резюме (1-2 коротких предложения) на каждый пункт.
-3. Формат вывода:
-   📰 Дайджест новостей — {date}
-   
-   🔹 Название события — суть кратко.
-   🔹 Название события — суть кратко.
-   
-   📌 Коротко о другом:
-   · Факт 1
-   · Факт 2
+Правила вывода (СТРОГО):
+- Не пересказывай задачу. Не повторяй правила. Не пиши анализ или рассуждения.
+- Не пиши вступлений вроде «Вот дайджест:» или «Анализ новостей».
+- Первый символ ответа — эмодзи 📰. Дальше идёт сразу готовый дайджест и больше ничего.
+"""
 
-Новости для обработки:
+_DIGEST_USER_PROMPT = """\
+Дата: {date}
+
+Новости:
 {news_block}
+
+Сделай дайджест по правилам.
 """
 
 
@@ -256,14 +295,40 @@ async def generate_digest(posts: list[dict]) -> str:
     news_block = "\n\n".join(news_lines)
     date_str = datetime.now().strftime("%d.%m.%Y")
 
-    prompt = _DIGEST_PROMPT.format(date=date_str, news_block=news_block)
-    result = await call_ai_with_failover(prompt, max_tokens=2000)
+    user_prompt = _DIGEST_USER_PROMPT.format(date=date_str, news_block=news_block)
+    result = await call_ai_with_failover(
+        user_prompt,
+        max_tokens=2000,
+        system_prompt=_DIGEST_SYSTEM_PROMPT,
+    )
 
     if result:
-        logger.info("Fireworks digest generated (%d chars).", len(result))
-        return result
+        cleaned = _clean_digest(result)
+        logger.info(
+            "Fireworks digest generated (%d chars, cleaned to %d).",
+            len(result),
+            len(cleaned),
+        )
+        if cleaned:
+            return cleaned
 
     return _fallback_digest(posts, date_str)
+
+
+def _clean_digest(raw: str) -> str:
+    """
+    Trim model preamble before the digest header.
+
+    Models occasionally echo the task or write an analysis step before the
+    actual digest. We anchor on the first '📰' (the required first character of
+    the answer) and drop everything before it.
+    """
+    if not raw:
+        return ""
+    idx = raw.find("📰")
+    if idx > 0:
+        return raw[idx:].strip()
+    return raw.strip()
 
 
 def _fallback_digest(posts: list[dict], date_str: str) -> str:
