@@ -499,51 +499,105 @@ async def btn_update(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Ошибка при обновлении. Попробуй позже.")
 
 
-@router.callback_query(F.data == "settings_test_parse")
-async def cb_test_parse(callback: CallbackQuery) -> None:
-    """DEBUG: Parse 5 posts from a random channel (from settings menu)."""
-    try:
-        await callback.message.edit_text("⏳ Тестовый парсинг... Выбираю случайный канал.", parse_mode="HTML")  # type: ignore
-    except Exception:
-        pass
-    await callback.answer()
+_TG_MAX_TEXT = 4000  # Telegram hard limit is 4096; keep some headroom.
+
+
+async def _send_in_chunks(message: Message, text: str, **kwargs) -> None:
+    """Send `text` to the chat, splitting on line boundaries if it's too long."""
+    if len(text) <= _TG_MAX_TEXT:
+        await message.answer(text, **kwargs)
+        return
+
+    buf = ""
+    for line in text.split("\n"):
+        if len(buf) + len(line) + 1 > _TG_MAX_TEXT:
+            if buf:
+                await message.answer(buf, **kwargs)
+            buf = line
+        else:
+            buf = f"{buf}\n{line}" if buf else line
+    if buf:
+        await message.answer(buf, **kwargs)
+
+
+async def _run_test_parse(message: Message, user_id: int) -> None:
+    """
+    Shared logic for /testparse and the settings menu button:
+    pick a random user channel, fetch the last 10 posts, build a digest from
+    them and stream the result back to the user. To avoid hammering Fireworks
+    rate limits, only the digest is AI-generated; per-post entries show a short
+    preview of the raw text.
+    """
+    wait_msg = await message.answer(
+        "⏳ Тестовый парсинг… выбираю случайный канал и тяну последние 10 постов."
+    )
 
     try:
         from services.telethon_parser import test_fetch_random_channel
-        channel, summary = await test_fetch_random_channel()
+        channel, items, digest = await test_fetch_random_channel(
+            user_id=user_id, count=10
+        )
 
-        if channel and summary:
-            await callback.message.edit_text(  # type: ignore
-                f"✅ <b>Успешный тест (@{channel}):</b>\n\n{summary}",
+        if not channel:
+            await wait_msg.edit_text(
+                "❌ Нет активных каналов. Добавь канал через ⚙️ Настройки."
+            )
+            return
+        if not items:
+            await wait_msg.edit_text(
+                f"❌ Канал @{channel} выбран, но подходящих постов не найдено "
+                f"(пусто, чёрный список или ошибка парсинга).",
+                parse_mode="HTML",
+            )
+            return
+
+        await wait_msg.edit_text(
+            f"✅ Канал: <b>@{channel}</b>\n"
+            f"Получено постов: <b>{len(items)}</b>\n\n"
+            f"📝 <b>Превью постов:</b>",
+            parse_mode="HTML",
+        )
+
+        # 1) List of post previews (no AI calls — just trimmed raw text)
+        lines = [f"{i}. {scrub_markdown(it['summary'])}" for i, it in enumerate(items, 1)]
+        await _send_in_chunks(message, "\n".join(lines))
+
+        # 2) Digest (single AI call)
+        if digest:
+            await _send_in_chunks(
+                message,
+                f"🔥 <b>Дайджест по @{channel}:</b>\n\n{digest}",
                 parse_mode="HTML",
             )
         else:
-            await callback.message.edit_text("❌ Ошибка: нет подходящих постов или каналов.", parse_mode="HTML")  # type: ignore
+            await message.answer(
+                "⚠️ Дайджест не сгенерирован (Fireworks вернул пусто или упёрся в лимит)."
+            )
+
     except Exception:
         logger.exception("Error during test parse")
         try:
-            await callback.message.edit_text("❌ Произошла ошибка во время тестового парсинга.")  # type: ignore
+            await wait_msg.edit_text("❌ Произошла ошибка во время тестового парсинга.")
         except Exception:
             pass
 
 
+@router.callback_query(F.data == "settings_test_parse")
+async def cb_test_parse(callback: CallbackQuery) -> None:
+    """DEBUG: Parse last 10 posts from a random channel (from settings menu)."""
+    await callback.answer()
+    user_id = _get_user_id(callback)
+    if callback.message:
+        await _run_test_parse(callback.message, user_id)  # type: ignore[arg-type]
+
+
+@router.message(Command("testparse"))
 @router.message(Command("test_parse"))
 async def cmd_test_parse(message: Message, state: FSMContext) -> None:
-    """DEBUG: Parse 1 post from a random channel (slash command)."""
+    """DEBUG: Parse last 10 posts from a random channel + build digest."""
     await state.clear()
-    wait_msg = await message.answer("⏳ Тестовый парсинг... Выбираю случайный канал.")
-
-    try:
-        from services.telethon_parser import test_fetch_random_channel
-        channel, summary = await test_fetch_random_channel()
-
-        if channel and summary:
-            await wait_msg.edit_text(f"✅ <b>Успешный тест (@{channel}):</b>\n\n{summary}", parse_mode="HTML")
-        else:
-            await wait_msg.edit_text("❌ Ошибка: нет подходящих постов.", parse_mode="HTML")
-    except Exception:
-        logger.exception("Error during test parse")
-        await wait_msg.edit_text("❌ Произошла ошибка во время тестового парсинга.")
+    user_id = _get_user_id(message)
+    await _run_test_parse(message, user_id)
 
 
 # ═══════════════════════════  🔥 DIGEST  ═══════════════════════════════════

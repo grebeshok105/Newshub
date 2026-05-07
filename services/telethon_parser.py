@@ -27,7 +27,7 @@ from config import (
     BASE_DIR,
 )
 from services.blacklist import is_blacklisted
-from services.summarizer import summarize_post
+from services.summarizer import generate_digest, summarize_post
 from utils.text import normalize_text
 
 logger = logging.getLogger(__name__)
@@ -232,26 +232,53 @@ async def fetch_all_channels(limit: int = 20) -> int:
     return total_new
 
 
-async def test_fetch_random_channel() -> tuple[str | None, str | None]:
+def _preview_line(text: str, max_chars: int = 100) -> str:
+    """Cheap one-line preview from raw post text — no AI calls."""
+    one_line = " ".join(text.split())
+    if len(one_line) <= max_chars:
+        return one_line
+    return one_line[: max_chars - 1].rstrip() + "…"
+
+
+async def test_fetch_random_channel(
+    user_id: int | None = None,
+    count: int = 10,
+) -> tuple[str | None, list[dict], str | None]:
     """
-    DEBUG: Pick a random channel and fetch 1 latest post.
-    Does NOT save to DB. Returns (channel_name, sample_summary).
+    DEBUG: Pick a random channel (from the user's channels if given, otherwise
+    any active channel across all users), fetch the latest `count` posts and
+    build a digest from them.
+
+    To stay well below Fireworks free-tier rate limits, this function makes a
+    *single* AI call (the digest); per-post previews are derived from the raw
+    text. Nothing is written to the database. Returns
+    (channel_name, items, digest) where each item has keys
+    ``message_id``, ``channel``, ``summary``, ``text``.
     """
-    channels = await models.get_all_active_channels()
+    if user_id is not None:
+        user_channels = await models.get_user_channels(user_id)
+        channels = [c["channel"] for c in user_channels if c.get("enabled")]
+    else:
+        channels = await models.get_all_active_channels()
+
     if not channels:
-        return None, None
+        return None, [], None
 
     username = random.choice(channels)
     client = get_client()
     if not client.is_connected():
         await start_client()
 
+    items: list[dict] = []
     try:
         entity = await client.get_entity(username)
-        logger.info("DEBUG: Test fetching from @%s…", username)
+        logger.info(
+            "DEBUG: Test fetching last %d posts from @%s…", count, username
+        )
 
-        # Iterate over the latest messages
-        async for message in client.iter_messages(entity, limit=3):
+        async for message in client.iter_messages(entity, limit=count * 3):
+            if len(items) >= count:
+                break
             try:
                 if not message.text:
                     continue
@@ -263,14 +290,26 @@ async def test_fetch_random_channel() -> tuple[str | None, str | None]:
                 if is_blacklisted(raw_text):
                     continue
 
-                # Generate summary but DO NOT SAVE to DB
-                summary = await summarize_post(raw_text)
-                return username, summary
-
+                items.append(
+                    {
+                        "message_id": message.id,
+                        "channel": username,
+                        "summary": _preview_line(raw_text),
+                        "text": raw_text,
+                    }
+                )
             except Exception:
-                pass
+                logger.exception(
+                    "Test parse: error on message #%s @%s",
+                    getattr(message, "id", "?"), username,
+                )
 
     except Exception:
         logger.exception("Failed to DEBUG fetch channel @%s", username)
+        return username, items, None
 
-    return username, None
+    if not items:
+        return username, items, None
+
+    digest = await generate_digest(items)
+    return username, items, digest
