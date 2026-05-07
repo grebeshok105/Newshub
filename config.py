@@ -32,16 +32,20 @@ PROXY_SECRET: str = os.getenv("PROXY_SECRET", "")
 # ── Fireworks AI / LLM ────────────────────────────────────────────────────
 FIREWORKS_API_KEY: str = os.getenv("FIREWORKS_API_KEY", "")
 FIREWORKS_MODEL: str = os.getenv(
-    "FIREWORKS_MODEL", "accounts/fireworks/models/deepseek-v4-pro"
+    "FIREWORKS_MODEL", "accounts/fireworks/models/glm-5p1"
 )
 
+# Order is by empirical instruction-following on our digest task:
+# - GLM and MiniMax respect the system prompt cleanly.
+# - Kimi-k2 ignores system role and dumps chain-of-thought into content.
+# - DeepSeek-v4-pro is a reasoning model: slow, token-hungry, last resort.
 SUPPORTED_MODELS: list[str] = [
-    "accounts/fireworks/models/deepseek-v4-pro",
-    "accounts/fireworks/models/kimi-k2p6",
-    "accounts/fireworks/models/kimi-k2p5",
     "accounts/fireworks/models/glm-5p1",
     "accounts/fireworks/models/glm-5",
     "accounts/fireworks/models/minimax-m2p7",
+    "accounts/fireworks/models/kimi-k2p6",
+    "accounts/fireworks/models/kimi-k2p5",
+    "accounts/fireworks/models/deepseek-v4-pro",
 ]
 
 # ── Channels ─────────────────────────────────────────────────────────────
