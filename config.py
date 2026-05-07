@@ -29,16 +29,16 @@ PROXY_IP: str = os.getenv("PROXY_IP", "")
 PROXY_PORT: str = os.getenv("PROXY_PORT", "")
 PROXY_SECRET: str = os.getenv("PROXY_SECRET", "")
 
-# ── LiteRouter / LLM ───────────────────────────────────────────────────────
-LITEROUTER_API_KEY: str = os.getenv("LITEROUTER_API_KEY", "")
-LITEROUTER_MODEL: str = os.getenv("LITEROUTER_MODEL", "gemini-free")
+# ── Fireworks AI / LLM ────────────────────────────────────────────────────
+FIREWORKS_API_KEY: str = os.getenv("FIREWORKS_API_KEY", "")
+FIREWORKS_MODEL: str = os.getenv(
+    "FIREWORKS_MODEL", "accounts/fireworks/models/deepseek-v4-pro"
+)
 
 SUPPORTED_MODELS: list[str] = [
-    "deepseek-v3-0324-free",
-    "gemini-free",
-    "grok-free",
-    "mistral-free",
-    "glm-free",
+    "accounts/fireworks/models/deepseek-v4-pro",
+    "accounts/fireworks/models/llama-v3p1-70b-instruct",
+    "accounts/fireworks/models/mixtral-8x22b-instruct",
 ]
 
 # ── Channels ─────────────────────────────────────────────────────────────

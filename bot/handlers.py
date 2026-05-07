@@ -26,7 +26,7 @@ from bot.keyboards import (
     channels_keyboard,
     remove_channel_keyboard,
 )
-from config import PAGE_SIZE, LITEROUTER_MODEL
+from config import PAGE_SIZE, FIREWORKS_MODEL
 from utils.text import truncate, scrub_markdown, smart_truncate
 from datetime import datetime, timezone, timedelta
 
@@ -376,7 +376,7 @@ async def cb_remove_channel(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "settings_model")
 async def cb_model_menu(callback: CallbackQuery) -> None:
     """Show AI model selection menu (from settings)."""
-    active = await models.get_setting("active_model") or LITEROUTER_MODEL
+    active = await models.get_setting("active_model") or FIREWORKS_MODEL
     kb = model_selection_keyboard(active)
     try:
         await callback.message.edit_text(  # type: ignore
@@ -394,7 +394,7 @@ async def cb_model_menu(callback: CallbackQuery) -> None:
 @router.message(Command("model"))
 async def cmd_model(message: Message) -> None:
     """Show AI model selection menu (slash command)."""
-    active = await models.get_setting("active_model") or LITEROUTER_MODEL
+    active = await models.get_setting("active_model") or FIREWORKS_MODEL
     kb = model_selection_keyboard(active)
     await message.answer(
         f"🤖 <b>Настройка нейросети</b>\n\n"
