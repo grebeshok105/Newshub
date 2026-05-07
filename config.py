@@ -32,16 +32,19 @@ PROXY_SECRET: str = os.getenv("PROXY_SECRET", "")
 # ── Fireworks AI / LLM ────────────────────────────────────────────────────
 FIREWORKS_API_KEY: str = os.getenv("FIREWORKS_API_KEY", "")
 FIREWORKS_MODEL: str = os.getenv(
-    "FIREWORKS_MODEL", "accounts/fireworks/models/deepseek-v4-pro"
+    "FIREWORKS_MODEL", "accounts/fireworks/models/kimi-k2p6"
 )
 
+# Non-reasoning models go first because deepseek-v4-pro emits chain-of-thought
+# inside the response body. We sanitize it, but it's slow and burns tokens, so
+# prefer Kimi/GLM/Minimax for production.
 SUPPORTED_MODELS: list[str] = [
-    "accounts/fireworks/models/deepseek-v4-pro",
     "accounts/fireworks/models/kimi-k2p6",
     "accounts/fireworks/models/kimi-k2p5",
     "accounts/fireworks/models/glm-5p1",
     "accounts/fireworks/models/glm-5",
     "accounts/fireworks/models/minimax-m2p7",
+    "accounts/fireworks/models/deepseek-v4-pro",
 ]
 
 # ── Channels ─────────────────────────────────────────────────────────────

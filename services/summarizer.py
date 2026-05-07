@@ -7,6 +7,7 @@ Uses aiohttp to call the Fireworks AI Chat Completions API directly.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 
 import aiohttp
@@ -18,6 +19,33 @@ logger = logging.getLogger(__name__)
 
 # ── Fireworks AI REST API endpoint ───────────────────────────────────────────
 _FIREWORKS_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
+
+# Reasoning models (e.g. deepseek-v4-pro) emit chain-of-thought wrapped in
+# <think>…</think> tags inside `content`. We want only the final answer, so we
+# strip these blocks before returning.
+_THINK_BLOCK_RE = re.compile(
+    r"<\s*(think|thinking|reasoning)\s*>.*?<\s*/\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_OPEN_THINK_RE = re.compile(
+    r"<\s*(think|thinking|reasoning)\s*>.*?(?=<\s*/\s*\1\s*>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CLOSE_THINK_RE = re.compile(
+    r"<\s*/\s*(think|thinking|reasoning)\s*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove reasoning-model chain-of-thought blocks from `text`."""
+    if not text:
+        return text
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    # Tolerate unclosed/malformed think blocks (truncated, missing close tag).
+    cleaned = _OPEN_THINK_RE.sub("", cleaned)
+    cleaned = _CLOSE_THINK_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -> str | None:
@@ -74,8 +102,10 @@ async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -
                 choices = data.get("choices", []) or []
                 if choices:
                     message = choices[0].get("message") or {}
-                    raw_content = message.get("content")
-                    content = (raw_content or "").strip()
+                    raw_content = message.get("content") or ""
+                    # Some reasoning models emit CoT in `reasoning_content`
+                    # instead of inline <think> blocks. We always discard it.
+                    content = _strip_thinking(raw_content).strip()
                     if content:
                         return content
                     finish_reason = choices[0].get("finish_reason")
