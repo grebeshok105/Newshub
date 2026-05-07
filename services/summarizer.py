@@ -71,14 +71,23 @@ async def _call_fireworks(prompt: str, model_name: str, max_tokens: int = 500) -
                     return None
 
                 data = await resp.json()
-                choices = data.get("choices", [])
+                choices = data.get("choices", []) or []
                 if choices:
-                    message = choices[0].get("message", {})
-                    content = message.get("content", "").strip()
+                    message = choices[0].get("message") or {}
+                    raw_content = message.get("content")
+                    content = (raw_content or "").strip()
                     if content:
                         return content
+                    finish_reason = choices[0].get("finish_reason")
+                    logger.warning(
+                        "Fireworks [%s] returned empty content (finish_reason=%s). "
+                        "Reasoning model may have run out of tokens.",
+                        model_name,
+                        finish_reason,
+                    )
+                    return None
 
-                logger.warning("Fireworks [%s] returned empty response.", model_name)
+                logger.warning("Fireworks [%s] returned no choices.", model_name)
                 return None
 
     except Exception:
@@ -155,7 +164,9 @@ async def summarize_post(text: str, recent_summaries: list[str] | None = None) -
     context_str = "\n".join(f"- {s}" for s in recent_summaries) if recent_summaries else "Нет недавних новостей."
     prompt = _SUMMARY_PROMPT.format(context=context_str, text=truncate(text, 2000))
 
-    result = await call_ai_with_failover(prompt, max_tokens=80)
+    # deepseek-v4-pro is a reasoning model that consumes tokens for internal
+    # chain-of-thought before emitting visible content; give it generous headroom.
+    result = await call_ai_with_failover(prompt, max_tokens=512)
 
     if result:
         # Clean up common LLM artifacts

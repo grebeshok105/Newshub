@@ -37,8 +37,11 @@ FIREWORKS_MODEL: str = os.getenv(
 
 SUPPORTED_MODELS: list[str] = [
     "accounts/fireworks/models/deepseek-v4-pro",
-    "accounts/fireworks/models/llama-v3p1-70b-instruct",
-    "accounts/fireworks/models/mixtral-8x22b-instruct",
+    "accounts/fireworks/models/kimi-k2p6",
+    "accounts/fireworks/models/kimi-k2p5",
+    "accounts/fireworks/models/glm-5p1",
+    "accounts/fireworks/models/glm-5",
+    "accounts/fireworks/models/minimax-m2p7",
 ]
 
 # ── Channels ─────────────────────────────────────────────────────────────
