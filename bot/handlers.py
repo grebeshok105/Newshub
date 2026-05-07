@@ -499,11 +499,34 @@ async def btn_update(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Ошибка при обновлении. Попробуй позже.")
 
 
+_TG_MAX_TEXT = 4000  # Telegram hard limit is 4096; keep some headroom.
+
+
+async def _send_in_chunks(message: Message, text: str, **kwargs) -> None:
+    """Send `text` to the chat, splitting on line boundaries if it's too long."""
+    if len(text) <= _TG_MAX_TEXT:
+        await message.answer(text, **kwargs)
+        return
+
+    buf = ""
+    for line in text.split("\n"):
+        if len(buf) + len(line) + 1 > _TG_MAX_TEXT:
+            if buf:
+                await message.answer(buf, **kwargs)
+            buf = line
+        else:
+            buf = f"{buf}\n{line}" if buf else line
+    if buf:
+        await message.answer(buf, **kwargs)
+
+
 async def _run_test_parse(message: Message, user_id: int) -> None:
     """
     Shared logic for /testparse and the settings menu button:
-    pick a random user channel, fetch the last 10 posts, summarize each, build
-    a digest from them, and stream the result back to the user.
+    pick a random user channel, fetch the last 10 posts, build a digest from
+    them and stream the result back to the user. To avoid hammering Fireworks
+    rate limits, only the digest is AI-generated; per-post entries show a short
+    preview of the raw text.
     """
     wait_msg = await message.answer(
         "⏳ Тестовый парсинг… выбираю случайный канал и тяну последние 10 постов."
@@ -531,24 +554,25 @@ async def _run_test_parse(message: Message, user_id: int) -> None:
         await wait_msg.edit_text(
             f"✅ Канал: <b>@{channel}</b>\n"
             f"Получено постов: <b>{len(items)}</b>\n\n"
-            f"📝 <b>Заголовки от ИИ:</b>",
+            f"📝 <b>Превью постов:</b>",
             parse_mode="HTML",
         )
 
-        # 1) List of summaries
-        lines = []
-        for i, it in enumerate(items, 1):
-            lines.append(f"{i}. {scrub_markdown(it['summary'])}")
-        await message.answer("\n".join(lines))
+        # 1) List of post previews (no AI calls — just trimmed raw text)
+        lines = [f"{i}. {scrub_markdown(it['summary'])}" for i, it in enumerate(items, 1)]
+        await _send_in_chunks(message, "\n".join(lines))
 
-        # 2) Digest
+        # 2) Digest (single AI call)
         if digest:
-            await message.answer(
+            await _send_in_chunks(
+                message,
                 f"🔥 <b>Дайджест по @{channel}:</b>\n\n{digest}",
                 parse_mode="HTML",
             )
         else:
-            await message.answer("⚠️ Дайджест не сгенерирован (Fireworks вернул пусто).")
+            await message.answer(
+                "⚠️ Дайджест не сгенерирован (Fireworks вернул пусто или упёрся в лимит)."
+            )
 
     except Exception:
         logger.exception("Error during test parse")

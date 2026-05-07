@@ -232,18 +232,28 @@ async def fetch_all_channels(limit: int = 20) -> int:
     return total_new
 
 
+def _preview_line(text: str, max_chars: int = 100) -> str:
+    """Cheap one-line preview from raw post text — no AI calls."""
+    one_line = " ".join(text.split())
+    if len(one_line) <= max_chars:
+        return one_line
+    return one_line[: max_chars - 1].rstrip() + "…"
+
+
 async def test_fetch_random_channel(
     user_id: int | None = None,
     count: int = 10,
 ) -> tuple[str | None, list[dict], str | None]:
     """
     DEBUG: Pick a random channel (from the user's channels if given, otherwise
-    any active channel across all users), fetch the latest `count` posts, run
-    each through the AI summarizer, then build a digest from them.
+    any active channel across all users), fetch the latest `count` posts and
+    build a digest from them.
 
-    Does NOT save anything to the database. Returns
-    (channel_name, items, digest) where each item is a dict with keys
-    ``message_id``, ``summary``, ``text``.
+    To stay well below Fireworks free-tier rate limits, this function makes a
+    *single* AI call (the digest); per-post previews are derived from the raw
+    text. Nothing is written to the database. Returns
+    (channel_name, items, digest) where each item has keys
+    ``message_id``, ``channel``, ``summary``, ``text``.
     """
     if user_id is not None:
         user_channels = await models.get_user_channels(user_id)
@@ -266,7 +276,7 @@ async def test_fetch_random_channel(
             "DEBUG: Test fetching last %d posts from @%s…", count, username
         )
 
-        async for message in client.iter_messages(entity, limit=count * 2):
+        async for message in client.iter_messages(entity, limit=count * 3):
             if len(items) >= count:
                 break
             try:
@@ -280,15 +290,11 @@ async def test_fetch_random_channel(
                 if is_blacklisted(raw_text):
                     continue
 
-                summary = await summarize_post(raw_text)
-                if not summary or "DUPLICATE_POST" in summary:
-                    summary = raw_text[:80]
-
                 items.append(
                     {
                         "message_id": message.id,
                         "channel": username,
-                        "summary": summary,
+                        "summary": _preview_line(raw_text),
                         "text": raw_text,
                     }
                 )
