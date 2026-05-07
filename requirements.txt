@@ -1,0 +1,14 @@
+# Telegram bot framework
+aiogram>=3.4,<4
+# Telethon userbot (channel parsing)
+Telethon>=1.36
+# Async SQLite
+aiosqlite>=0.20
+# Async HTTP (also used for Gemini REST API)
+aiohttp>=3.9
+# Scheduler
+APScheduler>=3.10,<4
+# Environment
+python-dotenv>=1.0
+# Timezone support
+pytz>=2024.1

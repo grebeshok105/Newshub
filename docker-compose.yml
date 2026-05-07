@@ -1,0 +1,10 @@
+version: "3.8"
+
+services:
+  newshub-bot:
+    build: .
+    container_name: newshub
+    restart: always
+    volumes:
+      - ./newshub_session.session:/app/newshub_session.session
+      - ./.env:/app/.env
